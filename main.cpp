@@ -34,7 +34,7 @@ CMatrixDouble77 generateRandomCovarianceMatrix(void)
     {
         for(int j = 0; j < 7; j++)
         {
-            A(i, j) = Eigen::internal::random<double>(-1.0, 1.0);
+            A(i, j) = Eigen::internal::random<double>(-0.001, 0.001);
         }
     }
 
@@ -161,7 +161,70 @@ void jacobiansPoseComposition(
 
 int main(int argc, char const *argv[])
 {
-    // tests
+    constexpr int NUM_TRIALS = 5000;
+    constexpr int NUM_SAMPLES_TO_PRINT = 5; 
+    constexpr double QUATERNION_ERROR = 1e-6; 
+
+    double sum_P = 0.0, sum_rel_P = 0.0, max_P = 0.0, max_rel_P = 0.0;
+
+    for (int k = 0; k < NUM_TRIALS; ++k)
+    {
+        CPose3DQuat x = generateRandomPose();
+        CPose3DQuat u = generateRandomPose();
+
+        // Add some small amount of noise to the quaternions so that their norms are not exactly 1
+        x.q.coeffs()(0) += Eigen::internal::random<double>(-QUATERNION_ERROR, QUATERNION_ERROR);
+        x.q.coeffs()(1) += Eigen::internal::random<double>(-QUATERNION_ERROR, QUATERNION_ERROR);
+        x.q.coeffs()(2) += Eigen::internal::random<double>(-QUATERNION_ERROR, QUATERNION_ERROR);
+        x.q.coeffs()(3) += Eigen::internal::random<double>(-QUATERNION_ERROR, QUATERNION_ERROR);
+
+        u.q.coeffs()(0) += Eigen::internal::random<double>(-QUATERNION_ERROR, QUATERNION_ERROR);
+        u.q.coeffs()(1) += Eigen::internal::random<double>(-QUATERNION_ERROR, QUATERNION_ERROR);
+        u.q.coeffs()(2) += Eigen::internal::random<double>(-QUATERNION_ERROR, QUATERNION_ERROR);
+        u.q.coeffs()(3) += Eigen::internal::random<double>(-QUATERNION_ERROR, QUATERNION_ERROR);
+
+        CMatrixDouble77 dx_norm, du_norm; // with normalization
+        CMatrixDouble77 dx_no_norm, du_no_norm; // without normalization
+
+        jacobiansPoseComposition(x, u, dx_norm, du_norm, true);
+        jacobiansPoseComposition(x, u, dx_no_norm,  du_no_norm,  false);
+
+        // Compare propagated differences:
+        const CMatrixDouble77 Px = generateRandomCovarianceMatrix();
+        const CMatrixDouble77 Pu = generateRandomCovarianceMatrix();
+
+        const CMatrixDouble77 P_norm = dx_norm * Px * dx_norm.transpose()
+                                     + du_norm * Pu * du_norm.transpose();
+
+        const CMatrixDouble77 P_no_norm  = dx_no_norm  * Px * dx_no_norm.transpose()
+                                         + du_no_norm  * Pu * du_no_norm.transpose();
+
+        const double nP = P_no_norm.block<4,4>(3,3).norm();
+        const double diff_P = (P_norm.block<4,4>(3,3) - P_no_norm.block<4,4>(3,3)).norm();
+        const double rel_P  = diff_P / std::max(nP, 1e-30);
+
+        sum_P += diff_P;
+        sum_rel_P += rel_P;
+        max_P = std::max(max_P, diff_P);
+        max_rel_P = std::max(max_rel_P, rel_P);
+
+        // Print first few samples:
+        if (k < NUM_SAMPLES_TO_PRINT)
+        {
+            std::cout << "----------------------------------------\n";
+            std::cout << std::format("Sample {}:\n", k+1);
+            std::cout << "With normalization:\n" << P_norm.block<4,4>(3,3) << "\n";
+            std::cout << "Without normalization:\n" << P_no_norm.block<4,4>(3,3) << "\n";
+            std::cout << "Difference:\n" << P_norm.block<4,4>(3,3) - P_no_norm.block<4,4>(3,3) << "\n";
+            std::cout << std::format("Difference in P norm: {:.6e}, relative: {:.6e}\n", diff_P, rel_P);
+            std::cout << std::format("x.quat().norm() - 1.0: {:.6e}\n", x.q.norm() - 1.0);
+            std::cout << std::format("u.quat().norm() - 1.0: {:.6e}\n", u.q.norm() - 1.0);
+        }
+    }
+
+    std::cout << "========================================\n";
+    std::cout << std::format("Average difference in P norm: {:.6e}, relative: {:.6e}\n", sum_P / NUM_TRIALS, sum_rel_P / NUM_TRIALS);
+    std::cout << std::format("Maximum difference in P norm: {:.6e}, relative: {:.6e}\n", max_P, max_rel_P);
+
     return 0;
 }
-
