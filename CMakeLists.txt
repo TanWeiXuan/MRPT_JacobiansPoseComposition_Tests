@@ -3,6 +3,8 @@ project(MRPT_JacobiansPoseComposition_tests)
 
 set(CMAKE_CXX_STANDARD 20)
 
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+
 # eigen-5.0.0
 add_library(Eigen INTERFACE) # Header only
 
