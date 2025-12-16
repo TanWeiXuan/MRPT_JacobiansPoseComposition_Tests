@@ -33,4 +33,4 @@ jobs:
     - name: Run executable
       run: |
         cd build
-        ./bin/main
+        ./bin/MRPT_JacobiansPoseComposition_tests
