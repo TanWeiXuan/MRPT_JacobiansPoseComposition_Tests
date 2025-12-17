@@ -1,5 +1,8 @@
+#include <array>
+#include <cassert>
 #include <format>
 #include <iostream>
+#include <vector>
 
 #include <Eigen/Dense>
 
@@ -27,23 +30,82 @@ CPose3DQuat generateRandomPose(void)
     return pose;
 }
 
-CMatrixDouble77 generateRandomCovarianceMatrix(void)
+double square(double x)
 {
-    CMatrixDouble77 A = CMatrixDouble77::Zero();
-    for(int i = 0; i < 7; i++)
+    return x * x;
+}
+
+template <int N>
+Eigen::Matrix<double, N, N> generateRandomSpdMatrix()
+{
+    Eigen::Matrix<double, N, N> A = Eigen::Matrix<double, N, N>::Zero();
+
+    for (int i = 0; i < N; i++)
     {
-        for(int j = 0; j < 7; j++)
+        for (int j = 0; j < N; j++)
         {
             A(i, j) = Eigen::internal::random<double>(-0.001, 0.001);
         }
     }
 
-    return A.transpose() * A + Eigen::Matrix<double, 7, 7>::Identity() * 1e-9;
+    return A.transpose() * A + Eigen::Matrix<double, N, N>::Identity() * 1e-9;
 }
 
-double square(double x)
+CMatrixDouble77 generateRandomCovarianceMatrix(const Eigen::Quaterniond& q)
 {
-    return x * x;
+    CMatrixDouble77 P = CMatrixDouble77::Zero();
+
+    // Translation covariance (positive definite)
+    P.block<3,3>(0,0) = generateRandomSpdMatrix<3>();
+
+    // Build an orthonormal basis for the tangent space at q (vectors orthogonal to q)
+    const Eigen::Vector4d q_vec(q.w(), q.x(), q.y(), q.z());
+    const Eigen::Vector4d q_unit = q_vec.normalized();
+
+    std::vector<Eigen::Vector4d> basis;
+    basis.reserve(3);
+
+    const std::array<Eigen::Vector4d, 4> canonical_basis = {
+        Eigen::Vector4d::Unit(0),
+        Eigen::Vector4d::Unit(1),
+        Eigen::Vector4d::Unit(2),
+        Eigen::Vector4d::Unit(3)
+    };
+
+    for (const auto& e : canonical_basis)
+    {
+        Eigen::Vector4d v = e - (q_unit.dot(e)) * q_unit;
+        for (const auto& b : basis)
+        {
+            v -= (b.dot(v)) * b;
+        }
+
+        const double norm_v = v.norm();
+        if (norm_v > 1e-12)
+        {
+            basis.push_back(v / norm_v);
+        }
+
+        if (basis.size() == 3) break;
+    }
+
+    Eigen::Matrix<double, 4, 3> B = Eigen::Matrix<double, 4, 3>::Zero();
+    for (size_t i = 0; i < basis.size(); ++i)
+    {
+        B.col(static_cast<int>(i)) = basis[i];
+    }
+
+    assert(basis.size() == 3 && "Quaternion tangent basis should have rank 3");
+
+    // Quaternion covariance constrained to the tangent space:
+    //  - rank <= 3
+    //  - Cq = 0
+    const Eigen::Matrix<double, 3, 3> quat_cov_tangent = generateRandomSpdMatrix<3>();
+    const CMatrixDouble44 quat_cov = B * quat_cov_tangent * B.transpose();
+
+    P.block<4,4>(3,3) = quat_cov;
+
+    return P;
 }
 
 CMatrixDouble44 normalizationJacobian(const Eigen::Quaterniond& q)
@@ -190,8 +252,8 @@ int main(int argc, char const *argv[])
         jacobiansPoseComposition(x, u, dx_no_norm,  du_no_norm,  false);
 
         // Compare propagated differences:
-        const CMatrixDouble77 Px = generateRandomCovarianceMatrix();
-        const CMatrixDouble77 Pu = generateRandomCovarianceMatrix();
+        const CMatrixDouble77 Px = generateRandomCovarianceMatrix(x.q);
+        const CMatrixDouble77 Pu = generateRandomCovarianceMatrix(u.q);
 
         const CMatrixDouble77 P_norm = dx_norm * Px * dx_norm.transpose()
                                      + du_norm * Pu * du_norm.transpose();
